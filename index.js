@@ -88718,6 +88718,7 @@ function initPromptSettings(settingsModal, settings3) {
     settingsModal.find(`#st_chatu8_tishici_export_current${suffix}`).on("click", () => st_chatu8_tishici_export_current(mode, settings3));
     settingsModal.find(`#st_chatu8_tishici_export_all${suffix}`).on("click", () => st_chatu8_tishici_export_all(settings3));
     settingsModal.find(`#st_chatu8_tishici_import${suffix}`).on("click", () => st_chatu8_tishici_import(settings3));
+    settingsModal.find(`#st_chatu8_yushe_import_image${suffix}`).on("click", () => st_chatu8_yushe_import_from_image(mode, settings3));
     settingsModal.find(`#st_chatu8_tishici_visual_select${suffix}`).on("click", () => {
       showPresetVisualSelector(mode, settings3, (presetName) => {
         const selectElement = document.getElementById("yusheid" + suffix);
@@ -89044,6 +89045,141 @@ async function st_chatu8_tishici_export_all(settings3) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+function parseChatu8NovelAIPngMetadata(arrayBuffer) {
+  try {
+    const bytes = new Uint8Array(arrayBuffer);
+    if (bytes.length < 8) return null;
+    const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (let i = 0; i < 8; i++) {
+      if (bytes[i] !== sig[i]) return null;
+    }
+    const latin1 = new TextDecoder("latin1");
+    const utf8 = new TextDecoder("utf-8");
+    const texts = {};
+    let off = 8;
+    while (off + 12 <= bytes.length) {
+      const len = bytes[off] << 24 | bytes[off + 1] << 16 | bytes[off + 2] << 8 | bytes[off + 3];
+      const type = String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
+      const dataStart = off + 8;
+      const dataEnd = dataStart + len;
+      if (dataEnd > bytes.length) break;
+      const data = bytes.subarray(dataStart, dataEnd);
+      if (type === "tEXt") {
+        const sep = data.indexOf(0);
+        if (sep !== -1) {
+          const kw = latin1.decode(data.subarray(0, sep));
+          texts[kw] = latin1.decode(data.subarray(sep + 1));
+        }
+      } else if (type === "iTXt") {
+        const kwEnd = data.indexOf(0);
+        if (kwEnd !== -1) {
+          const kw = utf8.decode(data.subarray(0, kwEnd));
+          let p = kwEnd + 1;
+          const compFlag = data[p];
+          p += 2;
+          p = data.indexOf(0, p) + 1;
+          p = data.indexOf(0, p) + 1;
+          if (compFlag === 0) {
+            texts[kw] = utf8.decode(data.subarray(p));
+          }
+        }
+      }
+      off = dataEnd + 4;
+      if (type === "IEND") break;
+    }
+    let meta = null;
+    const comment = texts["Comment"];
+    if (comment) {
+      try {
+        meta = JSON.parse(comment);
+      } catch (e) {
+        meta = null;
+      }
+    }
+    let prompt = "";
+    let negative = "";
+    if (meta && typeof meta === "object") {
+      prompt = meta.prompt || meta.v4_prompt?.caption?.base_caption || "";
+      negative = meta.uc || meta.v4_negative_prompt?.caption?.base_caption || meta.negative_prompt || "";
+    }
+    if (!prompt) {
+      prompt = texts["Description"] || "";
+    }
+    if (!prompt && !negative) return null;
+    return { prompt: String(prompt), negative: String(negative) };
+  } catch (e) {
+    console.error("[Prompt] parse PNG metadata failed:", e);
+    return null;
+  }
+}
+function st_chatu8_yushe_import_from_image(mode, settings3) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/*,.png";
+  input.multiple = true;
+  input.onchange = async (e) => {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (!files.length) return;
+    let successCount = 0;
+    let failCount = 0;
+    let lastName = "";
+    for (const file of files) {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const parsed = parseChatu8NovelAIPngMetadata(arrayBuffer);
+        if (!parsed || (!parsed.prompt && !parsed.negative)) {
+          failCount++;
+          continue;
+        }
+        const rawName = (file.name || "").replace(/\.[^.]+$/, "").trim() || "\u56FE\u7247\u9884\u8BBE";
+        let presetName = rawName;
+        let counter = 1;
+        while (settings3.yushe[presetName]) {
+          presetName = `${rawName}(${counter++})`;
+        }
+        let previewImageId = "";
+        try {
+          const dataUrl = await blobToBase642(file);
+          previewImageId = await saveConfigImage(dataUrl, {
+            format: file.type && file.type.split("/")[1] || "png",
+            filename: `preset_${presetName}_preview`
+          });
+        } catch (imgErr) {
+          console.error("[Prompt] save preview image failed:", imgErr);
+        }
+        settings3.yushe[presetName] = {
+          fixedPrompt: parsed.prompt || "",
+          fixedPrompt_end: "",
+          negativePrompt: parsed.negative || "",
+          previewImageId
+        };
+        lastName = presetName;
+        successCount++;
+      } catch (err) {
+        console.error("[Prompt] import from image failed:", err);
+        failCount++;
+      }
+    }
+    if (successCount > 0) {
+      const suffix = getSuffix(mode);
+      const yusheIdKey = `yusheid${mode === "sd" ? "_sd" : suffix}`;
+      settings3[yusheIdKey] = lastName;
+      saveSettingsDebounced41();
+      if (typeof window.loadSilterTavernChatu8Settings === "function") {
+        window.loadSilterTavernChatu8Settings();
+      }
+      if (failCount > 0) {
+        toastr.warning(`\u5DF2\u4ECE\u56FE\u7247\u5BFC\u5165 ${successCount} \u4E2A\u9884\u8BBE\uFF0C${failCount} \u4E2A\u5931\u8D25\uFF08\u7F3A\u5C11\u5143\u6570\u636E\u6216\u8BFB\u53D6\u9519\u8BEF\uFF09\u3002`, "\u56FE\u7247\u5BFC\u5165\u5B8C\u6210");
+      } else {
+        toastr.success(`\u5DF2\u4ECE\u56FE\u7247\u5BFC\u5165\u5E76\u65B0\u5EFA ${successCount} \u4E2A\u9884\u8BBE\uFF0C\u5E76\u9009\u4E2D\u300C${lastName}\u300D\u3002`, "\u56FE\u7247\u5BFC\u5165\u6210\u529F");
+      }
+    } else {
+      toastr.error("\u672A\u80FD\u4ECE\u6240\u9009\u56FE\u7247\u4E2D\u89E3\u6790\u51FA NovelAI \u63D0\u793A\u8BCD\u5143\u6570\u636E\uFF08\u9700\u5E26 Comment \u5143\u6570\u636E\u7684 NovelAI \u56FE\u7247\uFF09\u3002", "\u56FE\u7247\u5BFC\u5165\u5931\u8D25");
+    }
+    e.target.value = "";
+  };
+  input.click();
 }
 function st_chatu8_tishici_import(settings3) {
   const input = document.createElement("input");
