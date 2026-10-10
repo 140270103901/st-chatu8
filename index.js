@@ -2456,6 +2456,8 @@ var init_config = __esm({
       randomYushe: "false",
       randomYusheGroupId: "",
       randomYusheBatchStable: "false",
+      imageImportExcludePositive: "nsfw, 1girl, 1boy, hetero, simple background, white background",
+      imageImportExcludeNegative: "",
       aiAutonomousResolution: true,
       // AI自主分辨率：开启后，从提示词中提取到的尺寸会覆盖设置中的分辨率参数
       videoChannel: "comfyui",
@@ -88719,6 +88721,22 @@ function initPromptSettings(settingsModal, settings3) {
     settingsModal.find(`#st_chatu8_tishici_export_all${suffix}`).on("click", () => st_chatu8_tishici_export_all(settings3));
     settingsModal.find(`#st_chatu8_tishici_import${suffix}`).on("click", () => st_chatu8_tishici_import(settings3));
     settingsModal.find(`#st_chatu8_yushe_import_image${suffix}`).on("click", () => st_chatu8_yushe_import_from_image(mode, settings3));
+    settingsModal.find(`#st_chatu8_yushe_import_image_clean${suffix}`).on("click", () => st_chatu8_yushe_import_from_image(mode, settings3, {
+      positiveExclude: settings3.imageImportExcludePositive,
+      negativeExclude: settings3.imageImportExcludeNegative
+    }));
+    if (settings3.imageImportExcludePositive === void 0) settings3.imageImportExcludePositive = DEFAULT_IMAGE_IMPORT_EXCLUDE_POSITIVE;
+    if (settings3.imageImportExcludeNegative === void 0) settings3.imageImportExcludeNegative = "";
+    settingsModal.find(`#imageImportExcludePositive${suffix}`).val(settings3.imageImportExcludePositive).on("input", function() {
+      settings3.imageImportExcludePositive = $(this).val();
+      saveSettingsDebounced41();
+      syncImageImportExcludeInputs("imageImportExcludePositive", suffix, settings3.imageImportExcludePositive);
+    });
+    settingsModal.find(`#imageImportExcludeNegative${suffix}`).val(settings3.imageImportExcludeNegative).on("input", function() {
+      settings3.imageImportExcludeNegative = $(this).val();
+      saveSettingsDebounced41();
+      syncImageImportExcludeInputs("imageImportExcludeNegative", suffix, settings3.imageImportExcludeNegative);
+    });
     settingsModal.find(`#st_chatu8_tishici_visual_select${suffix}`).on("click", () => {
       showPresetVisualSelector(mode, settings3, (presetName) => {
         const selectElement = document.getElementById("yusheid" + suffix);
@@ -89046,6 +89064,22 @@ async function st_chatu8_tishici_export_all(settings3) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+const DEFAULT_IMAGE_IMPORT_EXCLUDE_POSITIVE = "nsfw, 1girl, 1boy, hetero, simple background, white background";
+function filterChatu8ImportTags(text, excludeList) {
+  const excludes = new Set(
+    String(excludeList || "").split(/[\uFF0C,\n]/).map((s) => s.trim().toLowerCase()).filter(Boolean)
+  );
+  if (excludes.size === 0) return String(text || "");
+  return String(text || "").split(",").map((s) => s.trim()).filter((s) => s && !excludes.has(s.toLowerCase())).join(", ");
+}
+function syncImageImportExcludeInputs(key, sourceSuffix, value) {
+  generationTabs2.forEach((m) => {
+    const s = getSuffix(m);
+    if (s === sourceSuffix) return;
+    const el = document.getElementById(`${key}${s}`);
+    if (el) el.value = value;
+  });
+}
 function parseChatu8NovelAIPngMetadata(arrayBuffer) {
   try {
     const bytes = new Uint8Array(arrayBuffer);
@@ -89113,7 +89147,7 @@ function parseChatu8NovelAIPngMetadata(arrayBuffer) {
     return null;
   }
 }
-function st_chatu8_yushe_import_from_image(mode, settings3) {
+function st_chatu8_yushe_import_from_image(mode, settings3, options = {}) {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = "image/png,image/*,.png";
@@ -89132,6 +89166,8 @@ function st_chatu8_yushe_import_from_image(mode, settings3) {
           failCount++;
           continue;
         }
+        const finalPrompt = options.positiveExclude ? filterChatu8ImportTags(parsed.prompt, options.positiveExclude) : parsed.prompt || "";
+        const finalNegative = options.negativeExclude ? filterChatu8ImportTags(parsed.negative, options.negativeExclude) : parsed.negative || "";
         const rawName = (file.name || "").replace(/\.[^.]+$/, "").trim() || "\u56FE\u7247\u9884\u8BBE";
         let presetName = rawName;
         let counter = 1;
@@ -89149,9 +89185,9 @@ function st_chatu8_yushe_import_from_image(mode, settings3) {
           console.error("[Prompt] save preview image failed:", imgErr);
         }
         settings3.yushe[presetName] = {
-          fixedPrompt: parsed.prompt || "",
+          fixedPrompt: finalPrompt,
           fixedPrompt_end: "",
-          negativePrompt: parsed.negative || "",
+          negativePrompt: finalNegative,
           previewImageId
         };
         lastName = presetName;
